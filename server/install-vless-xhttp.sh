@@ -219,7 +219,7 @@ write_caddyfile() {
     mkdir -p "$(dirname "${CADDYFILE}")"
     if [[ "${internal_tls}" == "true" ]]; then
         cat > "${CADDYFILE}" << EOF
-:443 {
+https://${site_label} {
   tls internal
   encode zstd gzip
   root * ${WEB_ROOT}
