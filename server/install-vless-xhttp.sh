@@ -231,6 +231,9 @@ https://${site_label} {
 
   handle ${path_match} {
     reverse_proxy ${XRAY_LISTEN}:${XRAY_PORT} {
+      transport http {
+        versions h2c 2
+      }
       header_up Host {host}
       header_up X-Real-IP {remote_host}
     }
@@ -261,6 +264,9 @@ ${site_label} {
 
   handle ${path_match} {
     reverse_proxy ${XRAY_LISTEN}:${XRAY_PORT} {
+      transport http {
+        versions h2c 2
+      }
       header_up Host {host}
       header_up X-Real-IP {remote_host}
     }
@@ -369,7 +375,7 @@ main() {
         site_label="${DOMAIN}"
     else
         public_host="${external_ip}"
-        sni=""
+        sni="${external_ip}"
         insecure=true
         internal_tls=true
         site_label="${external_ip}"
