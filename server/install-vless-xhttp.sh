@@ -233,8 +233,6 @@ write_caddyfile() {
     reverse_proxy ${XRAY_LISTEN}:${XRAY_PORT} {
       header_up Host {host}
       header_up X-Real-IP {remote_host}
-      header_up X-Forwarded-For {remote_host}
-      header_up X-Forwarded-Proto {scheme}
     }
   }
 
@@ -265,8 +263,6 @@ ${site_label} {
     reverse_proxy ${XRAY_LISTEN}:${XRAY_PORT} {
       header_up Host {host}
       header_up X-Real-IP {remote_host}
-      header_up X-Forwarded-For {remote_host}
-      header_up X-Forwarded-Proto {scheme}
     }
   }
 
@@ -309,7 +305,7 @@ setup_firewall() {
     ufw allow 22/tcp 2>/dev/null || true
     ufw allow 80/tcp 2>/dev/null || true
     ufw allow 443/tcp 2>/dev/null || true
-    echo "y" | ufw enable 2>/dev/null || true
+    ufw status | grep -q "Status: active" || echo "y" | ufw enable 2>/dev/null || true
 }
 
 write_client_params() {
@@ -394,8 +390,9 @@ main() {
 
     install_xray_systemd
     caddy validate --config "${CADDYFILE}"
+    caddy fmt --overwrite "${CADDYFILE}"
     systemctl enable caddy
-    systemctl reload caddy || systemctl restart caddy
+    systemctl restart caddy
     setup_firewall
     write_client_params "${public_host}" "${uuid}" "${XHTTP_PATH}" "${insecure}" "${sni}"
 
