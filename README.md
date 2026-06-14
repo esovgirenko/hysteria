@@ -1,155 +1,131 @@
-# VPN-Hysteria2-Dual: VPN на Hysteria 2 с двухсерверным split-routing
+# VLESS-XHTTP: HTTPS-маскированный VPN на Xray + Caddy
 
-Репозиторий переделан с клиентского входа **Xray REALITY** на **Hysteria 2**.
+Репозиторий переделан под связку **VLESS + XHTTP**. Цель — не держать отдельный “VPN-порт”, а прятать Xray за обычным HTTPS-сайтом:
 
-Основная идея осталась прежней:
+- **Caddy** слушает `80/443`, получает нормальный сертификат Let's Encrypt и отдаёт реальную веб-страницу.
+- **Xray** слушает только `127.0.0.1:10085`.
+- Скрытый `XHTTP path` проксируется Caddy в Xray.
+- Для постороннего посетителя домен выглядит как обычный сайт.
 
-| Режим | Документация | Когда использовать |
-|-------|--------------|-------------------|
-| **Один сервер** | этот README, `server/install-hysteria2.sh` | Один VPS, весь трафик через него |
-| **Два сервера (Dual)** | [dual-server/README.md](dual-server/README.md) | Сервер 1 ближе к РФ: RU-трафик локально, остальное через сервер 2 |
-
-В Dual-режиме клиенты подключаются к серверам по **Hysteria 2**. Xray больше не является клиентским протоколом, но используется внутри сервера 1 как маршрутизатор и между серверами как relay.
+Важно: нельзя честно гарантировать, что “ни одна DPI система не вычислит” туннель. Но эта схема снижает заметность: TLS завершает обычный веб-сервер, на домене есть сайт, Xray не торчит наружу, а трафик идёт как HTTPS-запросы к реальному домену.
 
 ---
 
 ## Требования
 
-- Сервер: Ubuntu 22.04 или Debian 12, root или sudo.
-- Клиент: приложение с поддержкой **Hysteria 2**.
-- Порты:
-  - клиентский вход Hysteria 2: **UDP 443** по умолчанию;
-  - Dual relay между серверами: **TCP 8443** с сервера 1 на сервер 2.
-
-Важно: Hysteria 2 работает поверх UDP. Откройте UDP-порт не только в UFW, но и в панели хостинга.
+- VPS: Ubuntu 22.04 или Debian 12.
+- Домен, A/AAAA-запись которого уже указывает на IP VPS.
+- Открытые порты: `80/tcp`, `443/tcp`, `22/tcp`.
+- Клиент с поддержкой **VLESS + XHTTP**.
 
 ---
 
-## Структура проекта
-
-```text
-├── dual-server/
-│   ├── README.md
-│   ├── install-server1.sh       # Сервер 1: Hysteria 2 + split-routing
-│   ├── install-server2.sh       # Сервер 2: Hysteria 2 fallback + relay
-│   ├── patch-server2.sh         # Миграция существующего server2
-│   ├── export-client-params.sh  # Показать hysteria-client-params.json
-│   ├── export-relay-params.sh   # Восстановить relay-server1-params.json
-│   └── client/dual-link-gen.py  # Две hysteria2:// ссылки
-├── server/
-│   └── install-hysteria2.sh     # Один VPS
-├── client/
-│   ├── hysteria-link-gen.py     # hysteria2://, QR, YAML
-│   ├── reality-link-gen.py      # Старый генератор VLESS REALITY оставлен для совместимости
-│   └── setup-venv.sh
-├── install-server1.sh           # Обёртка dual-server/install-server1.sh
-└── patch-server2.sh             # Обёртка dual-server/patch-server2.sh
-```
-
----
-
-## Один Сервер
+## Быстрая Установка
 
 На чистом VPS:
 
 ```bash
 git clone https://github.com/esovgirenko/hysteria.git
 cd hysteria
-chmod +x server/install-hysteria2.sh
-sudo ./server/install-hysteria2.sh
+chmod +x server/install-vless-xhttp.sh
+sudo ./server/install-vless-xhttp.sh
 ```
 
-Скрипт:
+Скрипт спросит:
 
-- скачает Hysteria 2;
-- создаст `/etc/hysteria/config.yaml`;
-- сгенерирует пароль, obfs salamander и самоподписанный TLS-сертификат;
-- запустит `hysteria.service`;
-- сохранит параметры клиента в `/etc/hysteria/hysteria-client-params.json`.
+- домен, например `example.com`;
+- email для Let's Encrypt;
+- скрытый XHTTP path, можно нажать Enter и получить случайный.
 
-Скопируйте `hysteria-client-params.json` на компьютер и сгенерируйте ссылку:
+Перед запуском A/AAAA-запись домена должна уже указывать на VPS. Скрипт проверит DNS и предупредит, если домен смотрит на другой IP.
+
+После установки:
+
+```text
+/usr/local/etc/xray/config.json
+/usr/local/etc/xray/vless-xhttp-client-params.json
+/etc/caddy/Caddyfile
+/var/www/xhttp-site/
+```
+
+Если на сервере уже были `/usr/local/etc/xray/config.json` или `/etc/caddy/Caddyfile`, скрипт сохранит копии рядом с суффиксом `.bak.ДАТА`.
+
+Сайт должен открываться:
+
+```bash
+curl -I https://example.com/
+```
+
+---
+
+## Клиентская Ссылка
+
+Скачайте с VPS:
+
+```bash
+scp root@example.com:/usr/local/etc/xray/vless-xhttp-client-params.json .
+```
+
+На компьютере:
 
 ```bash
 cd client
 ./setup-venv.sh
-.venv/bin/python hysteria-link-gen.py /path/to/hysteria-client-params.json --link --qr
+.venv/bin/python xhttp-link-gen.py /path/to/vless-xhttp-client-params.json --link --qr
 ```
 
-Для клиента, которому нужен YAML:
+Для клиента, которому нужен полный JSON:
 
 ```bash
-.venv/bin/python hysteria-link-gen.py /path/to/hysteria-client-params.json --yaml > config.yaml
+.venv/bin/python xhttp-link-gen.py /path/to/vless-xhttp-client-params.json --full-config > config.json
 ```
 
 ---
 
-## Dual-Режим
+## Что Делает Маскировку Лучше
 
-Кратко:
+Используйте практичные меры, которые не ломают совместимость:
 
-1. Сервер 2 за рубежом:
+- Держите на домене реальную страницу, а не пустую заглушку.
+- Не публикуйте и не переиспользуйте XHTTP path.
+- Используйте обычный домен, валидный TLS и стандартный порт `443`.
+- Не открывайте Xray наружу: он должен слушать только `127.0.0.1`.
+- Не ставьте подозрительные заголовки и нестандартные TLS-сертификаты.
+- Следите, чтобы DNS домена соответствовал VPS и сайт отвечал обычным браузером.
 
-   ```bash
-   sudo ./dual-server/install-server2.sh
-   ```
-
-   или миграция уже существующего сервера 2:
-
-   ```bash
-   sudo ./patch-server2.sh --server1-ip IP_СЕРВЕРА_1
-   ```
-
-2. Скопировать `/usr/local/etc/xray/relay-server1-params.json` с сервера 2 на сервер 1 в `/usr/local/etc/xray/`.
-
-3. Сервер 1:
-
-   ```bash
-   sudo ./install-server1.sh -y
-   ```
-
-4. Скопировать `/etc/hysteria/hysteria-client-params.json` с обоих серверов на компьютер.
-
-5. Сгенерировать две ссылки:
-
-   ```bash
-   cd dual-server/client
-   ../../client/.venv/bin/python dual-link-gen.py \
-     /path/to/server1-hysteria-client-params.json \
-     /path/to/server2-hysteria-client-params.json
-   ```
-
-Подробности: [dual-server/README.md](dual-server/README.md).
-
----
-
-## Клиенты
-
-Подойдут клиенты с поддержкой Hysteria 2, например:
-
-| Платформа | Клиенты |
-|-----------|---------|
-| iOS | Shadowrocket, Streisand, Hiddify |
-| macOS | Shadowrocket, Hiddify, NekoRay/NekoBox |
-| Android | Hiddify, NekoBox, v2rayNG версии с поддержкой Hysteria 2 |
-
-Импортируйте `hysteria2://` ссылку или YAML-конфиг, если приложение поддерживает импорт файла.
-
----
-
-## Проверка
-
-На сервере:
+По умолчанию используется `packet-up`, потому что это самый совместимый режим XHTTP через обычные HTTP reverse proxy. Если вы точно знаете, что ваш клиент и промежуточная сеть нормально работают с другим режимом:
 
 ```bash
-sudo systemctl status hysteria
-sudo journalctl -u hysteria -n 50 --no-pager
+XHTTP_MODE=stream-up sudo ./server/install-vless-xhttp.sh
 ```
 
-В Dual-режиме дополнительно:
+---
+
+## Проверка На Сервере
 
 ```bash
+sudo systemctl status caddy
 sudo systemctl status xray
-sudo XRAY_LOCATION_ASSET=/usr/local/etc/xray /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+sudo /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+sudo journalctl -u xray -n 50 --no-pager
+sudo journalctl -u caddy -n 50 --no-pager
 ```
 
-Если клиент не подключается, первым делом проверьте, что открыт именно **UDP** порт Hysteria 2.
+Обычный публичный сайт:
+
+```bash
+curl -I https://YOUR_DOMAIN/
+curl https://YOUR_DOMAIN/status/health.json
+```
+
+---
+
+## Старые Скрипты
+
+Файлы для Hysteria 2 и прежнего REALITY оставлены в репозитории как архив/совместимость, но основной путь установки теперь:
+
+```bash
+sudo ./server/install-vless-xhttp.sh
+```
+
+Dual-режим будет лучше переносить отдельно после проверки одиночного профиля на реальном домене.
