@@ -40,18 +40,23 @@ def build_vless_xhttp_link(
     path: str,
     *,
     mode: str = "packet-up",
+    sni: str = "",
+    insecure: bool = False,
     tag: str = "VLESS-XHTTP",
 ) -> str:
     params = {
         "type": "xhttp",
         "security": "tls",
-        "sni": host,
         "host": host,
         "path": path,
         "mode": mode,
         "alpn": "h2,http/1.1",
         "fp": "chrome",
     }
+    if sni:
+        params["sni"] = sni
+    if insecure:
+        params["allowInsecure"] = "1"
     query = "&".join(f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in params.items())
     return f"vless://{quote(uuid, safe='')}@{host}:{port}?{query}#{quote(tag, safe='')}"
 
@@ -80,7 +85,17 @@ def validate_link(link: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def export_outbound_json(host: str, port: int, uuid: str, path: str, mode: str, tag: str) -> dict:
+def export_outbound_json(
+    host: str,
+    port: int,
+    uuid: str,
+    path: str,
+    mode: str,
+    tag: str,
+    *,
+    sni: str = "",
+    insecure: bool = False,
+) -> dict:
     return {
         "protocol": "vless",
         "settings": {
@@ -101,9 +116,10 @@ def export_outbound_json(host: str, port: int, uuid: str, path: str, mode: str, 
             "network": "xhttp",
             "security": "tls",
             "tlsSettings": {
-                "serverName": host,
+                "serverName": sni or host,
                 "alpn": ["h2", "http/1.1"],
                 "fingerprint": "chrome",
+                "allowInsecure": insecure,
             },
             "xhttpSettings": {
                 "host": host,
@@ -115,7 +131,17 @@ def export_outbound_json(host: str, port: int, uuid: str, path: str, mode: str, 
     }
 
 
-def export_full_config(host: str, port: int, uuid: str, path: str, mode: str, socks_port: int = 10808) -> dict:
+def export_full_config(
+    host: str,
+    port: int,
+    uuid: str,
+    path: str,
+    mode: str,
+    *,
+    sni: str = "",
+    insecure: bool = False,
+    socks_port: int = 10808,
+) -> dict:
     return {
         "log": {"loglevel": "warning"},
         "inbounds": [
@@ -131,7 +157,7 @@ def export_full_config(host: str, port: int, uuid: str, path: str, mode: str, so
             }
         ],
         "outbounds": [
-            export_outbound_json(host, port, uuid, path, mode, "proxy")
+            export_outbound_json(host, port, uuid, path, mode, "proxy", sni=sni, insecure=insecure)
         ],
     }
 
@@ -154,6 +180,8 @@ def main() -> None:
     parser.add_argument("--uuid", help="UUID пользователя")
     parser.add_argument("--path", help="XHTTP path")
     parser.add_argument("--mode", default=None, help="XHTTP mode")
+    parser.add_argument("--sni", default=None, help="SNI для TLS, если отличается от host")
+    parser.add_argument("--insecure", action="store_true", help="Разрешить self-signed/internal TLS")
     parser.add_argument("--tag", default="VLESS-XHTTP", help="Имя профиля")
 
     out = parser.add_argument_group("Вывод")
@@ -174,6 +202,8 @@ def main() -> None:
     uuid = args.uuid or data.get("uuid", "")
     path = args.path or data.get("path", "")
     mode = args.mode or data.get("mode", "packet-up")
+    sni = args.sni if args.sni is not None else data.get("sni", "")
+    insecure = bool(args.insecure or data.get("insecure", False))
 
     if not all([host, port, uuid, path]):
         print("Задайте host, port, uuid и path или укажите vless-xhttp-client-params.json.", file=sys.stderr)
@@ -182,7 +212,7 @@ def main() -> None:
         print("Path должен начинаться с '/'.", file=sys.stderr)
         sys.exit(1)
 
-    link = build_vless_xhttp_link(host, port, uuid, path, mode=mode, tag=args.tag)
+    link = build_vless_xhttp_link(host, port, uuid, path, mode=mode, sni=sni, insecure=insecure, tag=args.tag)
 
     if args.validate:
         ok, msg = validate_link(link)
@@ -192,9 +222,9 @@ def main() -> None:
     if args.link:
         print(link)
     if args.json:
-        print(json.dumps(export_outbound_json(host, port, uuid, path, mode, args.tag), ensure_ascii=False, indent=2))
+        print(json.dumps(export_outbound_json(host, port, uuid, path, mode, args.tag, sni=sni, insecure=insecure), ensure_ascii=False, indent=2))
     if args.full_config:
-        print(json.dumps(export_full_config(host, port, uuid, path, mode), ensure_ascii=False, indent=2))
+        print(json.dumps(export_full_config(host, port, uuid, path, mode, sni=sni, insecure=insecure), ensure_ascii=False, indent=2))
     if args.qr:
         print_qr(link)
     if args.text:
@@ -203,6 +233,8 @@ def main() -> None:
         print(f"  UUID:   {uuid}")
         print(f"  Path:   {path}")
         print(f"  Mode:   {mode}")
+        print(f"  SNI:    {sni or '(empty)'}")
+        print(f"  Insecure TLS: {insecure}")
         print("\n--- Ссылка vless ---")
         print(link)
         print()

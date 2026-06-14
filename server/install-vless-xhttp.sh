@@ -211,17 +211,47 @@ EOF
 }
 
 write_caddyfile() {
-    local domain="$1"
+    local site_label="$1"
     local email="$2"
     local path="$3"
+    local internal_tls="$4"
     local path_match="${path}*"
     mkdir -p "$(dirname "${CADDYFILE}")"
+    if [[ "${internal_tls}" == "true" ]]; then
+        cat > "${CADDYFILE}" << EOF
+:443 {
+  tls internal
+  encode zstd gzip
+  root * ${WEB_ROOT}
+
+  header {
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+
+  handle ${path_match} {
+    reverse_proxy ${XRAY_LISTEN}:${XRAY_PORT} {
+      header_up Host {host}
+      header_up X-Real-IP {remote_host}
+      header_up X-Forwarded-For {remote_host}
+      header_up X-Forwarded-Proto {scheme}
+    }
+  }
+
+  handle {
+    file_server
+  }
+}
+EOF
+        return
+    fi
+
     cat > "${CADDYFILE}" << EOF
 {
   email ${email}
 }
 
-${domain} {
+${site_label} {
   encode zstd gzip
   root * ${WEB_ROOT}
 
@@ -283,15 +313,19 @@ setup_firewall() {
 }
 
 write_client_params() {
-    local domain="$1"
+    local host="$1"
     local uuid="$2"
     local path="$3"
+    local insecure="$4"
+    local sni="$5"
     jq -n \
         --arg protocol "vless-xhttp" \
-        --arg host "${domain}" \
+        --arg host "${host}" \
         --arg uuid "${uuid}" \
         --arg path "${path}" \
         --arg mode "${XHTTP_MODE}" \
+        --argjson insecure "${insecure}" \
+        --arg sni "${sni}" \
         '{
           protocol: $protocol,
           serverHost: $host,
@@ -301,8 +335,9 @@ write_client_params() {
           network: "xhttp",
           path: $path,
           mode: $mode,
+          insecure: $insecure,
           alpn: ["h2", "http/1.1"]
-        }' > "${CLIENT_INFO}"
+        } + (if $sni | length > 0 then {sni: $sni} else {} end)' > "${CLIENT_INFO}"
     chmod 600 "${CONFIG_FILE}" "${CLIENT_INFO}"
 }
 
@@ -314,27 +349,45 @@ main() {
 
     echo ""
     log_info "=== Установка VLESS + XHTTP + Caddy ==="
-    read -rp "Домен, который уже указывает A/AAAA на этот VPS: " DOMAIN
-    [[ -n "${DOMAIN}" ]] || { log_err "Домен обязателен."; exit 1; }
-    read -rp "Email для Let's Encrypt: " EMAIL
-    [[ -n "${EMAIL}" ]] || { log_err "Email обязателен."; exit 1; }
+    read -rp "Домен, который уже указывает A/AAAA на этот VPS (Enter = временно без домена): " DOMAIN
+    EMAIL=""
+    if [[ -n "${DOMAIN}" ]]; then
+        read -rp "Email для Let's Encrypt: " EMAIL
+        [[ -n "${EMAIL}" ]] || { log_err "Email обязателен для доменного режима."; exit 1; }
+    else
+        log_warn "Включён временный режим без домена: Caddy выпустит внутренний TLS-сертификат, клиенту нужен allowInsecure."
+    fi
     read -rp "Скрытый XHTTP path [авто]: " XHTTP_PATH
     XHTTP_PATH="${XHTTP_PATH:-$(random_path)}"
     [[ "${XHTTP_PATH}" == /* ]] || XHTTP_PATH="/${XHTTP_PATH}"
 
-    local uuid external_ip
+    local uuid external_ip public_host insecure sni internal_tls site_label
     uuid=$(generate_uuid)
     external_ip=$(get_external_ip)
-    check_domain_dns "${DOMAIN}" "${external_ip}"
+    if [[ -n "${DOMAIN}" ]]; then
+        check_domain_dns "${DOMAIN}" "${external_ip}"
+        public_host="${DOMAIN}"
+        sni="${DOMAIN}"
+        insecure=false
+        internal_tls=false
+        site_label="${DOMAIN}"
+    else
+        public_host="${external_ip}"
+        sni=""
+        insecure=true
+        internal_tls=true
+        site_label="${external_ip}"
+    fi
 
     log_info "Внешний IP сервера: ${external_ip}"
+    log_info "Адрес для клиента: ${public_host}:443"
     log_info "XHTTP path: ${XHTTP_PATH}"
 
     backup_file "${CONFIG_FILE}"
     backup_file "${CADDYFILE}"
-    write_site "${DOMAIN}"
+    write_site "${site_label}"
     write_xray_config "${uuid}" "${XHTTP_PATH}"
-    write_caddyfile "${DOMAIN}" "${EMAIL}" "${XHTTP_PATH}"
+    write_caddyfile "${site_label}" "${EMAIL}" "${XHTTP_PATH}" "${internal_tls}"
 
     log_info "Проверка Xray config.json..."
     "${INSTALL_DIR}/xray" run -test -config "${CONFIG_FILE}"
@@ -344,7 +397,7 @@ main() {
     systemctl enable caddy
     systemctl reload caddy || systemctl restart caddy
     setup_firewall
-    write_client_params "${DOMAIN}" "${uuid}" "${XHTTP_PATH}"
+    write_client_params "${public_host}" "${uuid}" "${XHTTP_PATH}" "${insecure}" "${sni}"
 
     echo ""
     echo "=============================================="
@@ -353,7 +406,7 @@ main() {
     echo "Клиентские параметры:"
     echo "  ${CLIENT_INFO}"
     echo ""
-    echo "Проверьте сайт: https://${DOMAIN}/"
+    echo "Проверьте сайт: https://${public_host}/"
     echo "Ссылка: client/xhttp-link-gen.py ${CLIENT_INFO} --link"
     echo "=============================================="
 }
