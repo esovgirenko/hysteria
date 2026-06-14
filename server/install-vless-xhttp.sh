@@ -10,6 +10,9 @@ readonly CONFIG_DIR="/usr/local/etc/xray"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
 readonly CLIENT_INFO="${CONFIG_DIR}/vless-xhttp-client-params.json"
 readonly CADDYFILE="/etc/caddy/Caddyfile"
+readonly SELF_SIGNED_DIR="/etc/caddy/selfsigned"
+readonly SELF_SIGNED_CERT="${SELF_SIGNED_DIR}/ip.crt"
+readonly SELF_SIGNED_KEY="${SELF_SIGNED_DIR}/ip.key"
 readonly WEB_ROOT="${WEB_ROOT:-/var/www/xhttp-site}"
 readonly XRAY_LISTEN="${XRAY_LISTEN:-127.0.0.1}"
 readonly XRAY_PORT="${XRAY_PORT:-10085}"
@@ -97,6 +100,25 @@ generate_uuid() {
 
 random_path() {
     printf "/assets/%s/api" "$(openssl rand -hex 8)"
+}
+
+generate_self_signed_cert() {
+    local ip="$1"
+    mkdir -p "${SELF_SIGNED_DIR}"
+    openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+        -keyout "${SELF_SIGNED_KEY}" \
+        -out "${SELF_SIGNED_CERT}" \
+        -subj "/CN=${ip}" \
+        -addext "subjectAltName=IP:${ip}" >/dev/null 2>&1
+    chown root:caddy "${SELF_SIGNED_CERT}" "${SELF_SIGNED_KEY}"
+    chmod 644 "${SELF_SIGNED_CERT}"
+    chmod 640 "${SELF_SIGNED_KEY}"
+}
+
+cert_pin_sha256_hex() {
+    openssl x509 -in "${SELF_SIGNED_CERT}" -outform DER \
+        | openssl dgst -sha256 -hex \
+        | awk '{print $2}'
 }
 
 get_external_ip() {
@@ -220,7 +242,7 @@ write_caddyfile() {
     if [[ "${internal_tls}" == "true" ]]; then
         cat > "${CADDYFILE}" << EOF
 https://${site_label} {
-  tls internal
+  tls ${SELF_SIGNED_CERT} ${SELF_SIGNED_KEY}
   encode zstd gzip
   root * ${WEB_ROOT}
 
@@ -320,6 +342,7 @@ write_client_params() {
     local path="$3"
     local insecure="$4"
     local sni="$5"
+    local pinned_peer_cert_sha256="$6"
     jq -n \
         --arg protocol "vless-xhttp" \
         --arg host "${host}" \
@@ -328,6 +351,7 @@ write_client_params() {
         --arg mode "${XHTTP_MODE}" \
         --argjson insecure "${insecure}" \
         --arg sni "${sni}" \
+        --arg pinnedPeerCertSha256 "${pinned_peer_cert_sha256}" \
         '{
           protocol: $protocol,
           serverHost: $host,
@@ -339,7 +363,12 @@ write_client_params() {
           mode: $mode,
           insecure: $insecure,
           alpn: ["h2", "http/1.1"]
-        } + (if $sni | length > 0 then {sni: $sni} else {} end)' > "${CLIENT_INFO}"
+        }
+        + (if $sni | length > 0 then {sni: $sni} else {} end)
+        + (if $pinnedPeerCertSha256 | length > 0 then {
+            pinnedPeerCertSha256: $pinnedPeerCertSha256,
+            "pinnedPeerCert-Sha256": $pinnedPeerCertSha256
+          } else {} end)' > "${CLIENT_INFO}"
     chmod 600 "${CONFIG_FILE}" "${CLIENT_INFO}"
 }
 
@@ -357,13 +386,13 @@ main() {
         read -rp "Email для Let's Encrypt: " EMAIL
         [[ -n "${EMAIL}" ]] || { log_err "Email обязателен для доменного режима."; exit 1; }
     else
-        log_warn "Включён временный режим без домена: Caddy выпустит внутренний TLS-сертификат, клиенту нужен allowInsecure."
+        log_warn "Включён временный режим без домена: будет создан self-signed IP-сертификат. Клиенту нужен pinnedPeerCert-Sha256."
     fi
     read -rp "Скрытый XHTTP path [авто]: " XHTTP_PATH
     XHTTP_PATH="${XHTTP_PATH:-$(random_path)}"
     [[ "${XHTTP_PATH}" == /* ]] || XHTTP_PATH="/${XHTTP_PATH}"
 
-    local uuid external_ip public_host insecure sni internal_tls site_label
+    local uuid external_ip public_host insecure sni internal_tls site_label pinned_peer_cert_sha256
     uuid=$(generate_uuid)
     external_ip=$(get_external_ip)
     if [[ -n "${DOMAIN}" ]]; then
@@ -373,17 +402,23 @@ main() {
         insecure=false
         internal_tls=false
         site_label="${DOMAIN}"
+        pinned_peer_cert_sha256=""
     else
         public_host="${external_ip}"
         sni="${external_ip}"
         insecure=true
         internal_tls=true
         site_label="${external_ip}"
+        generate_self_signed_cert "${external_ip}"
+        pinned_peer_cert_sha256="$(cert_pin_sha256_hex)"
     fi
 
     log_info "Внешний IP сервера: ${external_ip}"
     log_info "Адрес для клиента: ${public_host}:443"
     log_info "XHTTP path: ${XHTTP_PATH}"
+    if [[ -n "${pinned_peer_cert_sha256}" ]]; then
+        log_info "Pinned peer cert SHA-256: ${pinned_peer_cert_sha256}"
+    fi
 
     backup_file "${CONFIG_FILE}"
     backup_file "${CADDYFILE}"
@@ -400,7 +435,7 @@ main() {
     systemctl enable caddy
     systemctl restart caddy
     setup_firewall
-    write_client_params "${public_host}" "${uuid}" "${XHTTP_PATH}" "${insecure}" "${sni}"
+    write_client_params "${public_host}" "${uuid}" "${XHTTP_PATH}" "${insecure}" "${sni}" "${pinned_peer_cert_sha256}"
 
     echo ""
     echo "=============================================="

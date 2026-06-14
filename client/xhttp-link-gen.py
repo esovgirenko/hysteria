@@ -42,6 +42,7 @@ def build_vless_xhttp_link(
     mode: str = "packet-up",
     sni: str = "",
     insecure: bool = False,
+    pinned_peer_cert_sha256: str = "",
     tag: str = "VLESS-XHTTP",
 ) -> str:
     params = {
@@ -55,7 +56,9 @@ def build_vless_xhttp_link(
     }
     if sni:
         params["sni"] = sni
-    if insecure:
+    if pinned_peer_cert_sha256:
+        params["pinnedPeerCert-Sha256"] = pinned_peer_cert_sha256
+    elif insecure:
         params["allowInsecure"] = "1"
     query = "&".join(f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in params.items())
     return f"vless://{quote(uuid, safe='')}@{host}:{port}?{query}#{quote(tag, safe='')}"
@@ -95,7 +98,19 @@ def export_outbound_json(
     *,
     sni: str = "",
     insecure: bool = False,
+    pinned_peer_cert_sha256: str = "",
 ) -> dict:
+    tls_settings = {
+        "serverName": sni or host,
+        "alpn": ["h2", "http/1.1"],
+        "fingerprint": "chrome",
+    }
+    if pinned_peer_cert_sha256:
+        tls_settings["pinnedPeerCertSha256"] = pinned_peer_cert_sha256
+        tls_settings["pinnedPeerCert-Sha256"] = pinned_peer_cert_sha256
+    else:
+        tls_settings["allowInsecure"] = insecure
+
     return {
         "protocol": "vless",
         "settings": {
@@ -115,12 +130,7 @@ def export_outbound_json(
         "streamSettings": {
             "network": "xhttp",
             "security": "tls",
-            "tlsSettings": {
-                "serverName": sni or host,
-                "alpn": ["h2", "http/1.1"],
-                "fingerprint": "chrome",
-                "allowInsecure": insecure,
-            },
+            "tlsSettings": tls_settings,
             "xhttpSettings": {
                 "host": host,
                 "path": path,
@@ -140,6 +150,7 @@ def export_full_config(
     *,
     sni: str = "",
     insecure: bool = False,
+    pinned_peer_cert_sha256: str = "",
     socks_port: int = 10808,
 ) -> dict:
     return {
@@ -157,7 +168,17 @@ def export_full_config(
             }
         ],
         "outbounds": [
-            export_outbound_json(host, port, uuid, path, mode, "proxy", sni=sni, insecure=insecure)
+            export_outbound_json(
+                host,
+                port,
+                uuid,
+                path,
+                mode,
+                "proxy",
+                sni=sni,
+                insecure=insecure,
+                pinned_peer_cert_sha256=pinned_peer_cert_sha256,
+            )
         ],
     }
 
@@ -182,6 +203,7 @@ def main() -> None:
     parser.add_argument("--mode", default=None, help="XHTTP mode")
     parser.add_argument("--sni", default=None, help="SNI для TLS, если отличается от host")
     parser.add_argument("--insecure", action="store_true", help="Разрешить self-signed/internal TLS")
+    parser.add_argument("--pinned-peer-cert-sha256", default=None, help="SHA-256 pin сертификата сервера в hex")
     parser.add_argument("--tag", default="VLESS-XHTTP", help="Имя профиля")
 
     out = parser.add_argument_group("Вывод")
@@ -204,6 +226,11 @@ def main() -> None:
     mode = args.mode or data.get("mode", "packet-up")
     sni = args.sni if args.sni is not None else data.get("sni", "")
     insecure = bool(args.insecure or data.get("insecure", False))
+    pinned_peer_cert_sha256 = (
+        args.pinned_peer_cert_sha256
+        if args.pinned_peer_cert_sha256 is not None
+        else data.get("pinnedPeerCertSha256", data.get("pinnedPeerCert-Sha256", ""))
+    )
 
     if not all([host, port, uuid, path]):
         print("Задайте host, port, uuid и path или укажите vless-xhttp-client-params.json.", file=sys.stderr)
@@ -212,7 +239,17 @@ def main() -> None:
         print("Path должен начинаться с '/'.", file=sys.stderr)
         sys.exit(1)
 
-    link = build_vless_xhttp_link(host, port, uuid, path, mode=mode, sni=sni, insecure=insecure, tag=args.tag)
+    link = build_vless_xhttp_link(
+        host,
+        port,
+        uuid,
+        path,
+        mode=mode,
+        sni=sni,
+        insecure=insecure,
+        pinned_peer_cert_sha256=pinned_peer_cert_sha256,
+        tag=args.tag,
+    )
 
     if args.validate:
         ok, msg = validate_link(link)
@@ -222,9 +259,9 @@ def main() -> None:
     if args.link:
         print(link)
     if args.json:
-        print(json.dumps(export_outbound_json(host, port, uuid, path, mode, args.tag, sni=sni, insecure=insecure), ensure_ascii=False, indent=2))
+        print(json.dumps(export_outbound_json(host, port, uuid, path, mode, args.tag, sni=sni, insecure=insecure, pinned_peer_cert_sha256=pinned_peer_cert_sha256), ensure_ascii=False, indent=2))
     if args.full_config:
-        print(json.dumps(export_full_config(host, port, uuid, path, mode, sni=sni, insecure=insecure), ensure_ascii=False, indent=2))
+        print(json.dumps(export_full_config(host, port, uuid, path, mode, sni=sni, insecure=insecure, pinned_peer_cert_sha256=pinned_peer_cert_sha256), ensure_ascii=False, indent=2))
     if args.qr:
         print_qr(link)
     if args.text:
@@ -235,6 +272,7 @@ def main() -> None:
         print(f"  Mode:   {mode}")
         print(f"  SNI:    {sni or '(empty)'}")
         print(f"  Insecure TLS: {insecure}")
+        print(f"  Pinned cert SHA-256: {pinned_peer_cert_sha256 or '(empty)'}")
         print("\n--- Ссылка vless ---")
         print(link)
         print()
