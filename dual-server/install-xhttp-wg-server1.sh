@@ -7,6 +7,7 @@ readonly XRAY_VERSION="${XRAY_VERSION:-26.2.6}"
 readonly INSTALL_DIR="/usr/local/bin"
 readonly CONFIG_DIR="/usr/local/etc/xray"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
+readonly GEODATA_DIR="${CONFIG_DIR}"
 readonly CLIENT_INFO="${CONFIG_DIR}/vless-xhttp-client-params.json"
 readonly WG_PARAMS_DEFAULT="${CONFIG_DIR}/xhttp-wg-server1-params.json"
 readonly CADDYFILE="/etc/caddy/Caddyfile"
@@ -113,6 +114,21 @@ install_xray() {
     cp -f "${xray_bin}" "${INSTALL_DIR}/xray"
     chmod +x "${INSTALL_DIR}/xray"
     rm -rf /tmp/xray-extract "${zip_file}"
+}
+
+install_geodata() {
+    local geoip="${GEODATA_DIR}/geoip.dat"
+    local geosite="${GEODATA_DIR}/geosite.dat"
+    mkdir -p "${GEODATA_DIR}"
+    if [[ ! -f "${geoip}" || ! -f "${geosite}" ]]; then
+        log_info "Загрузка geoip.dat и geosite.dat..."
+        curl -fSL -o "${geoip}" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+        curl -fSL -o "${geosite}" \
+            "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+    else
+        log_info "Geo-данные уже установлены в ${GEODATA_DIR}."
+    fi
 }
 
 backup_file() {
@@ -304,6 +320,16 @@ write_xray_config() {
       },
       {
         "type": "field",
+        "ip": ["geoip:ru"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "domain": ["geosite:category-ru", "geosite:yandex"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
         "network": "tcp,udp",
         "outboundTag": "wg-exit"
       }
@@ -369,6 +395,7 @@ Wants=wg-quick@${WG_IF}.service
 
 [Service]
 Type=simple
+Environment=XRAY_LOCATION_ASSET=${GEODATA_DIR}
 ExecStart=${INSTALL_DIR}/xray run -config ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5s
@@ -429,6 +456,7 @@ main() {
     load_wg_params
     install_deps
     install_xray
+    install_geodata
     install_caddy
 
     echo ""
@@ -457,7 +485,7 @@ main() {
     write_caddyfile "${DOMAIN}" "${EMAIL}" "${XHTTP_PATH}"
 
     log_info "Проверка Xray config.json..."
-    "${INSTALL_DIR}/xray" run -test -config "${CONFIG_FILE}"
+    XRAY_LOCATION_ASSET="${GEODATA_DIR}" "${INSTALL_DIR}/xray" run -test -config "${CONFIG_FILE}"
 
     install_xray_systemd
     caddy validate --config "${CADDYFILE}"
