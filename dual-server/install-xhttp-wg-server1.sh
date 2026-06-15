@@ -11,6 +11,7 @@ readonly CLIENT_INFO="${CONFIG_DIR}/vless-xhttp-client-params.json"
 readonly WG_PARAMS_DEFAULT="${CONFIG_DIR}/xhttp-wg-server1-params.json"
 readonly CADDYFILE="/etc/caddy/Caddyfile"
 readonly WEB_ROOT="${WEB_ROOT:-/var/www/xhttp-site}"
+readonly WEB_UPSTREAM="${WEB_UPSTREAM:-}"
 readonly XRAY_LISTEN="${XRAY_LISTEN:-127.0.0.1}"
 readonly XRAY_PORT="${XRAY_PORT:-10085}"
 readonly XHTTP_MODE="${XHTTP_MODE:-packet-up}"
@@ -317,6 +318,12 @@ write_caddyfile() {
     local email="$2"
     local path="$3"
     local path_match="${path}*"
+    local fallback_handler
+    if [[ -n "${WEB_UPSTREAM}" ]]; then
+        fallback_handler="    reverse_proxy ${WEB_UPSTREAM}"
+    else
+        fallback_handler="    file_server"
+    fi
     cat > "${CADDYFILE}" << EOF
 {
   email ${email}
@@ -346,7 +353,7 @@ ${domain} {
   }
 
   handle {
-    file_server
+${fallback_handler}
   }
 }
 EOF

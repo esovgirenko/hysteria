@@ -100,6 +100,14 @@ chmod +x dual-server/install-xhttp-wg-server1.sh
 sudo ./dual-server/install-xhttp-wg-server1.sh
 ```
 
+Если на Сервере 1 уже работает приложение, например `aiagent` на `127.0.0.1:8000`, не меняйте порт `80` на `8000`. Оставьте `80/443` за Caddy и запустите установку так:
+
+```bash
+WEB_UPSTREAM=http://127.0.0.1:8000 sudo ./dual-server/install-xhttp-wg-server1.sh
+```
+
+Тогда обычные HTTPS-запросы к домену будут уходить в приложение, а скрытый XHTTP path останется маршрутом к Xray.
+
 Скрипт спросит:
 
 - домен Сервера 1;

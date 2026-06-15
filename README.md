@@ -31,6 +31,19 @@ chmod +x server/install-vless-xhttp.sh
 sudo ./server/install-vless-xhttp.sh
 ```
 
+Если на сервере уже есть веб-приложение на локальном порту, например `aiagent` на `127.0.0.1:8000`, оставьте порты `80/443` за Caddy и передайте приложение как upstream:
+
+```bash
+WEB_UPSTREAM=http://127.0.0.1:8000 sudo ./server/install-vless-xhttp.sh
+```
+
+В этом режиме Caddy:
+
+- обслуживает Let's Encrypt на `80`;
+- принимает публичный HTTPS на `443`;
+- отдаёт обычные запросы в приложение на `8000`;
+- скрытый XHTTP path прокидывает в Xray.
+
 Скрипт спросит:
 
 - домен, например `example.com`; можно нажать Enter и временно работать без домена по IP;
