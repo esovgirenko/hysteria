@@ -142,6 +142,19 @@ curl -k https://YOUR_SERVER_IP/status/health.json
 
 ---
 
+## Два Сервера
+
+Для схемы, где клиент подключается к Серверу 1 по **VLESS + XHTTP + домен**, а весь клиентский трафик выходит через Сервер 2 по быстрому **WireGuard**-туннелю, используйте:
+
+```bash
+sudo ./dual-server/install-xhttp-wg-server2.sh
+sudo ./dual-server/install-xhttp-wg-server1.sh
+```
+
+Подробный порядок установки: [dual-server/README.md](dual-server/README.md).
+
+---
+
 ## Старые Скрипты
 
 Файлы для Hysteria 2 и прежнего REALITY оставлены в репозитории как архив/совместимость, но основной путь установки теперь:
